@@ -1,0 +1,55 @@
+# Binance Futures Configuration
+# Copy this to config.py and fill in your API keys
+
+# API Keys (from https://demo.binance.com/)
+API_KEY = "your_demo_api_key_here"
+API_SECRET = "your_demo_api_secret_here"
+
+# API Endpoints
+FUTURES_URL = "https://demo-fapi.binance.com"
+
+# ============ TRADING SETTINGS ============
+
+# Risk Management
+STOP_LOSS_PCT = 2.5      # Stop loss percentage
+TAKE_PROFIT_PCT = 5.0     # Take profit percentage
+RISK_PER_TRADE = 0.15     # 15% of balance per trade
+MAX_POSITIONS = 5         # Maximum concurrent positions
+LEVERAGE = 20             # Leverage multiplier (testnet)
+
+# Scanning Settings
+INTERVAL = 120            # Seconds between scans
+TIMEFRAME = "1h"          # Candle timeframe (1m, 5m, 15m, 1h, 4h, 1d)
+
+# Coin Universe
+SCAN_MODE = "all"         # "all" | "whitelist" | "top_movers"
+COINS = None              # None = all, or list: ["BTC", "ETH", "PEPE"]
+MIN_VOLUME_24H = 1_000_000  # Minimum 24h volume in USDT
+
+# ============ STRATEGY SETTINGS ============
+
+# Indicator Parameters
+RSI_LENGTH = 14
+RSI_OVERSOLD = 40
+RSI_OVERBOUGHT = 60
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+ADX_LENGTH = 14
+ADX_THRESHOLD = 25
+EMA_LENGTH = 20
+VOLUME_SMA_LENGTH = 20
+VOLUME_SPIKE_MULTIPLIER = 1.5
+
+# Entry Scoring
+MIN_SCORE_BUY = 5         # Minimum score to open LONG
+MIN_SCORE_SELL = 5        # Minimum score to open SHORT
+
+# ============ NOTIFICATIONS ============
+
+# Enable alerts (for future notification integration)
+ENABLE_ALERTS = True
+ALERT_ON_ENTRY = True
+ALERT_ON_EXIT = True
+ALERT_ON_SL = True
+ALERT_ON_TP = True

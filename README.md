@@ -20,32 +20,52 @@
 ## Quick Setup
 
 ```bash
-# 1. Clone this skill
+# 1. Clone this repo
 git clone https://github.com/dinarsanjaya/psyduck-trading-bot.git
 cd psyduck-trading-bot
 
 # 2. Install dependencies
 python3 -m venv venv
-source venv/bin/activate
-pip install pandas pandas_ta requests
+source venv/bin/activate        # Linux/Mac
+# venv\Scripts\activate         # Windows
+pip install -r requirements.txt
 
 # 3. Configure API keys
-# Edit SKILL.md and replace with your Binance testnet keys:
-# API_KEY = "your_demo_api_key"
-# API_SECRET = "your_demo_secret"
+cp config.py.example config.py
+# Edit config.py and add your API keys from https://demo.binance.com/
+
+# 4. Verify setup
+python setup_check.py
 ```
 
 ### Get Binance Testnet API Keys
 1. Web: https://demo.binance.com/ (official demo platform)
 2. API: `https://demo-fapi.binance.com`
 3. Get API Keys from: https://www.binance.com/en/futures → API Management
-4. Login with demo account or link your main account for testnet
+
+---
+
+## File Structure
+
+```
+psyduck-trading-bot/
+├── SKILL.md            # Main skill documentation (for AI agents)
+├── README.md           # This file
+├── requirements.txt    # Python dependencies
+├── config.py.example   # Configuration template
+└── setup_check.py      # Setup verification script
+```
 
 ---
 
 ## Usage
 
-### Check Positions
+### Run Setup Check
+```bash
+python setup_check.py
+```
+
+### Check Positions (Manual)
 ```python
 import hmac, hashlib, time, requests
 
@@ -82,6 +102,23 @@ def open_position(symbol, side, qty):
 
 ---
 
+## Configuration Options
+
+Edit `config.py`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `STOP_LOSS_PCT` | 2.5 | Stop loss percentage |
+| `TAKE_PROFIT_PCT` | 5.0 | Take profit percentage |
+| `RISK_PER_TRADE` | 0.15 | 15% of balance per trade |
+| `MAX_POSITIONS` | 5 | Max concurrent positions |
+| `LEVERAGE` | 20 | Leverage multiplier |
+| `INTERVAL` | 120 | Seconds between scans |
+| `SCAN_MODE` | "all" | "all" \| "whitelist" \| "top_movers" |
+| `COINS` | None | None = all, or list specific coins |
+
+---
+
 ## Strategy
 
 ### Indicators & Scoring
@@ -105,16 +142,6 @@ def open_position(symbol, side, qty):
 | Max Positions | 5 |
 | Risk per Trade | 15% of balance |
 | Leverage | 20x (testnet) |
-
----
-
-## File Structure
-
-```
-psyduck-trading-bot/
-├── SKILL.md      # Main skill documentation
-└── README.md     # This file
-```
 
 ---
 
