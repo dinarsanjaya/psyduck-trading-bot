@@ -51,6 +51,13 @@ pip install -r requirements.txt
 
 ### Step 2: Configure API Keys
 
+**Option A: Environment variables (recommended for quick setup)**
+```bash
+export BINANCE_API_KEY="your_demo_api_key"
+export BINANCE_API_SECRET="your_demo_api_secret"
+```
+
+**Option B: config.py file**
 ```bash
 cp config.py.example config.py
 # Edit config.py and add your API keys

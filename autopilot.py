@@ -2,6 +2,7 @@
 Multi-Coin Autopilot - Professor Mode
 Binance Demo Futures + RSI/MACD/ADX Strategy
 """
+import os
 import time
 import requests
 import hmac
@@ -11,8 +12,8 @@ import pandas_ta as ta
 from datetime import datetime
 
 # ============== CONFIG ==============
-API_KEY = "FSUmnDqHGbQVtVlftKrtxZrfA75BzfZUszltB9WBvxWBNgkrCP4kT19qPBzpbRur"
-API_SECRET = "2okFUCG6p8RYljC5YMVC7Y37v198b8K55ctvtk6BMScsaZJFy68CAMuFuyyMnvZO"
+API_KEY = os.environ.get("BINANCE_API_KEY", "your_api_key_here")
+API_SECRET = os.environ.get("BINANCE_API_SECRET", "your_api_secret_here")
 
 FUTURES_URL = "https://demo-fapi.binance.com"
 INTERVAL = "1h"
