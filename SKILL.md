@@ -7,7 +7,7 @@
 ## Overview
 
 This skill enables AI agents to:
-- 🔍 Scan **300+ USDT perpetuals** dynamically (no fixed list)
+- 🔍 Scan **548 USDT perpetuals** dynamically (no fixed list)
 - 📈 Execute **LONG/SHORT** positions automatically
 - ⚡ **Real-time** position monitoring via WebSocket (<100ms updates)
 - 🛡️ Auto **SL/TP** with instant execution when levels hit
