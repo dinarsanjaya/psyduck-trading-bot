@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "binance-api-node": "^0.13.8",
+    "dotenv": "^17.3.1"
+  }
+}
