@@ -2,14 +2,14 @@
 """
 Real-Time Trade Monitor - WebSocket Based
 Monitors positions with <100ms price updates
-Auto-updates watchlist when new positions are opened
+Fresh instance per session - auto-restarts on new positions
 """
 
 import json
 import hmac
 import hashlib
 import time
-import threading
+import os
 import sys
 import signal
 from websocket import create_connection, WebSocketConnectionClosedException
@@ -19,13 +19,9 @@ API_SECRET = "2okFUCG6p8RYljC5YMVC7Y37v198b8K55ctvtk6BMScsaZJFy68CAMuFuyyMnvZO"
 FUTURES_URL = "https://demo-fapi.binance.com"
 WS_URL = "wss://stream.binance.com:9443/ws"
 
-# Positions to monitor (symbol -> {entry, side, amount, sl, tp})
 POSITIONS = {}
 PRICES = {}
-
-# WebSocket state
 ws = None
-ws_lock = threading.Lock()
 running = True
 
 def signed_post(endpoint, data):
@@ -40,7 +36,6 @@ def signed_post(endpoint, data):
     return r.json()
 
 def get_positions():
-    """Fetch current positions from API"""
     ts = int(time.time() * 1000)
     q = f"timestamp={ts}"
     sig = hmac.new(API_SECRET.encode(), q.encode(), hashlib.sha256).hexdigest()
@@ -50,9 +45,8 @@ def get_positions():
     return r.json()
 
 def close_position(symbol, side, qty):
-    """Close position with market order"""
     close_side = "BUY" if side == "SHORT" else "SELL"
-    print(f"🔴 CLOSING {symbol} ({close_side}) at market price...")
+    print(f"🔴 CLOSING {symbol} ({close_side})...")
     
     result = signed_post("/fapi/v1/order", {
         "symbol": symbol,
@@ -63,16 +57,12 @@ def close_position(symbol, side, qty):
     
     if 'orderId' in result:
         print(f"✅ {symbol} CLOSED! Order ID: {result['orderId']}")
-        if symbol in POSITIONS:
-            del POSITIONS[symbol]
-        reconnect_websocket()  # Update stream after closing
         return True
     else:
         print(f"❌ Close failed: {result}")
         return False
 
 def check_and_close(symbol, current_price):
-    """Check if TP or SL hit, close if needed"""
     if symbol not in POSITIONS:
         return
     
@@ -85,26 +75,25 @@ def check_and_close(symbol, current_price):
     
     if side == "SHORT":
         if current_price <= tp:
-            print(f"🎯 {symbol} TP HIT! Price ${current_price} <= TP ${tp}")
+            print(f"🎯 {symbol} TP HIT! ${current_price} <= ${tp}")
             close_position(symbol, side, qty)
         elif current_price >= sl:
-            print(f"🛑 {symbol} SL HIT! Price ${current_price} >= SL ${sl}")
+            print(f"🛑 {symbol} SL HIT! ${current_price} >= ${sl}")
             close_position(symbol, side, qty)
-    else:  # LONG
+    else:
         if current_price >= tp:
-            print(f"🎯 {symbol} TP HIT! Price ${current_price} >= TP ${tp}")
+            print(f"🎯 {symbol} TP HIT! ${current_price} >= ${tp}")
             close_position(symbol, side, qty)
         elif current_price <= sl:
-            print(f"🛑 {symbol} SL HIT! Price ${current_price} <= SL ${sl}")
+            print(f"🛑 {symbol} SL HIT! ${current_price} <= ${sl}")
             close_position(symbol, side, qty)
 
 def load_positions():
-    """Load positions from API and setup TP/SL levels"""
     global POSITIONS
     pos_data = get_positions()
     
-    old_positions = set(POSITIONS.keys())
-    new_positions = set()
+    old_keys = set(POSITIONS.keys())
+    new_positions = {}
     
     for p in pos_data:
         amt = float(p['positionAmt'])
@@ -112,7 +101,6 @@ def load_positions():
             continue
             
         symbol = p['symbol']
-        new_positions.add(symbol)
         entry = float(p['entryPrice'])
         side = "SHORT" if amt < 0 else "LONG"
         qty = abs(amt)
@@ -124,7 +112,7 @@ def load_positions():
             sl = entry * 0.975
             tp = entry * 1.05
         
-        POSITIONS[symbol] = {
+        new_positions[symbol] = {
             'entry': entry,
             'side': side,
             'amount': qty,
@@ -132,79 +120,65 @@ def load_positions():
             'tp': tp
         }
     
-    # Show new positions
-    added = new_positions - old_positions
-    removed = old_positions - new_positions
+    POSITIONS = new_positions
+    added = set(POSITIONS.keys()) - old_keys
+    removed = old_keys - set(POSITIONS.keys())
     
-    if added:
-        print(f"🆕 New positions detected: {', '.join(added)}")
-    if removed:
-        print(f"❌ Positions closed: {', '.join(removed)}")
-    
-    return added, removed
+    return added, removed, set(POSITIONS.keys())
 
-def reconnect_websocket():
-    """Reconnect WebSocket with updated stream list"""
-    global ws
-    
-    if not POSITIONS:
-        print("No positions to monitor")
-        return
-    
-    with ws_lock:
-        try:
-            if ws:
-                ws.close()
-        except:
-            pass
-        
-        streams = [f"{s.lower()}@ticker" for s in POSITIONS.keys()]
-        ws_url = f"{WS_URL}/{'/'.join(streams)}"
-        
-        print(f"\n🔗 Reconnecting WebSocket with {len(streams)} streams...")
-        print(f"   Watching: {', '.join(POSITIONS.keys())}")
-        
-        try:
-            ws = create_connection(ws_url, timeout=30)
-            print("✅ WebSocket reconnected!\n")
-        except Exception as e:
-            print(f"❌ Reconnect failed: {e}")
-
-def position_checker():
-    """Background thread to check for new positions every 30 seconds"""
+def restart_fresh():
+    """Kill self and restart with current positions"""
     global running
-    
-    while running:
-        time.sleep(30)
-        if not running:
-            break
-        
-        old_keys = set(POSITIONS.keys())
-        load_positions()
-        new_keys = set(POSITIONS.keys())
-        
-        if old_keys != new_keys:
-            print(f"📊 Position change detected, updating WebSocket...")
-            reconnect_websocket()
+    print("\n🔄 Restarting fresh...")
+    running = False
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
-def websocket_listener():
-    """WebSocket listener for real-time price updates"""
+def signal_handler(sig, frame):
+    global running
+    print("\n🛑 Shutting down...")
+    running = False
+    sys.exit(0)
+
+def main():
     global ws, running
     
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    print("""
+╔══════════════════════════════════════════════╗
+║   Real-Time Trade Monitor (WebSocket)      ║
+║   Fresh instance - auto restarts on change  ║
+╚══════════════════════════════════════════════╝
+    """)
+    
+    print("📡 Loading positions...")
+    added, removed, current = load_positions()
+    
+    if removed:
+        print(f"❌ Closed: {', '.join(removed)}")
+    if added:
+        print(f"🆕 New: {', '.join(added)}")
+    
     if not POSITIONS:
-        print("No positions to monitor")
-        return
+        print("❌ No open positions found")
+        sys.exit(1)
+    
+    print(f"\n📊 Monitoring {len(POSITIONS)} positions:")
+    for sym, p in POSITIONS.items():
+        print(f"   {sym}: {p['side']} | Entry ${p['entry']:.6f} | TP ${p['tp']:.6f}")
+    print()
     
     streams = [f"{s.lower()}@ticker" for s in POSITIONS.keys()]
     ws_url = f"{WS_URL}/{'/'.join(streams)}"
     
-    print(f"🔗 Connecting to WebSocket...")
-    print(f"   Streams: {', '.join(POSITIONS.keys())}")
-    print()
+    print(f"🔗 Connecting WebSocket...")
+    print(f"   Streams: {', '.join(POSITIONS.keys())}\n")
     
     try:
         ws = create_connection(ws_url, timeout=30)
-        print("✅ WebSocket connected! Monitoring in real-time...\n")
+        print("✅ Connected! Monitoring real-time...\n")
+        
+        last_check = time.time()
         
         while running:
             try:
@@ -215,60 +189,34 @@ def websocket_listener():
                     price = float(data['c'])
                     PRICES[symbol] = price
                     check_and_close(symbol, price)
+                
+                # Check for position changes every 30 seconds
+                if time.time() - last_check > 30:
+                    last_check = time.time()
+                    added, removed, current = load_positions()
+                    
+                    if added or removed:
+                        print(f"\n🔄 Position change detected!")
+                        if removed:
+                            print(f"   ❌ Closed: {', '.join(removed)}")
+                        if added:
+                            print(f"   🆕 New: {', '.join(added)}")
+                        restart_fresh()
                     
             except WebSocketConnectionClosedException:
                 if running:
-                    print("⚠️ WebSocket disconnected, reconnecting...")
+                    print("⚠️ WebSocket disconnected")
                     time.sleep(1)
-                    reconnect_websocket()
+                    ws = create_connection(ws_url, timeout=30)
             except Exception as e:
                 if running:
-                    print(f"Error: {e}")
-                    time.sleep(1)
+                    pass
                     
     except Exception as e:
-        print(f"❌ WebSocket error: {e}")
+        print(f"❌ Error: {e}")
     finally:
         if ws:
-            try:
-                ws.close()
-            except:
-                pass
-
-def signal_handler(sig, frame):
-    global running
-    print("\n🛑 Shutting down...")
-    running = False
-    sys.exit(0)
-
-def main():
-    global running
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    print("""
-╔══════════════════════════════════════════════╗
-║   Real-Time Trade Monitor (WebSocket)      ║
-║   <100ms updates + auto position detection ║
-╚══════════════════════════════════════════════╝
-    """)
-    
-    print("📡 Loading positions...")
-    load_positions()
-    
-    if not POSITIONS:
-        print("❌ No open positions found")
-        sys.exit(1)
-    
-    print(f"\n📊 Monitoring {len(POSITIONS)} positions in real-time...")
-    print("   Auto-updates when new positions are opened")
-    print("   Press Ctrl+C to stop\n")
-    
-    # Start position checker thread
-    checker = threading.Thread(target=position_checker, daemon=True)
-    checker.start()
-    
-    websocket_listener()
+            ws.close()
 
 if __name__ == "__main__":
     main()
