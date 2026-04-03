@@ -7,25 +7,25 @@
 ## Overview
 
 This skill enables AI agents to:
-- Scan 300+ USDT perpetuals dynamically (no fixed list)
-- Execute LONG/SHORT positions automatically
-- Monitor positions with auto SL/TP
-- Track PnL in real-time
-
-**Mode:** Professor (auto-execute, alert on execution only)
+- 🔍 Scan **300+ USDT perpetuals** dynamically (no fixed list)
+- 📈 Execute **LONG/SHORT** positions automatically
+- ⚡ **Real-time** position monitoring via WebSocket (<100ms updates)
+- 🛡️ Auto **SL/TP** with instant execution when levels hit
+- 📊 Track **PnL in USD** (not percentage)
+- 🤖 **Professor Mode:** executes autonomously, alerts on trades only
 
 ---
 
 ## Prerequisites
 
 1. **Binance Demo Account** (testnet)
-   - Web: https://demo.binance.com/ (official demo trading platform)
+   - Web: https://demo.binance.com/ (official demo platform)
    - API: `https://demo-fapi.binance.com`
    - Get API Keys from: https://www.binance.com/en/futures → API Management
 
 2. **Python 3.8+** with dependencies:
    ```
-   pandas pandas_ta requests
+   pandas pandas_ta requests websocket-client
    ```
 
 3. **OpenClaw** agent running
@@ -37,56 +37,92 @@ This skill enables AI agents to:
 ### Step 1: Setup Environment
 
 ```bash
-# Create workspace directory
-mkdir -p ~/trading-bot
-cd ~/trading-bot
+# Clone the skill
+git clone https://github.com/dinarsanjaya/psyduck-trading-bot.git
+cd psyduck-trading-bot
 
 # Create virtual environment
-python3 -m venv trading-bot-venv
-source trading-bot-venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 
 # Install dependencies
-pip install pandas pandas_ta requests
+pip install -r requirements.txt
 ```
 
 ### Step 2: Configure API Keys
 
-Create `config.py` in your trading directory:
-
-```python
-API_KEY = "your_binance_demo_api_key"
-API_SECRET = "your_binance_demo_secret"
-FUTURES_URL = "https://demo-fapi.binance.com"
-
-# Trading settings
-STOP_LOSS_PCT = 2.5
-TAKE_PROFIT_PCT = 5.0
-MAX_POSITIONS = 5
-RISK_PER_TRADE = 0.15  # 15% of balance
-INTERVAL = 120  # seconds between scans
-```
-
-### Step 3: Run the Bot
-
 ```bash
-source ~/trading-bot/trading-bot-venv/bin/activate
-python trading-bot/learn/autopilot.py
+cp config.py.example config.py
+# Edit config.py and add your API keys
 ```
 
-Run in background:
+### Step 3: Run
+
+**Autopilot (scanning + auto-trade):**
 ```bash
-nohup python trading-bot/learn/autopilot.py > /tmp/autopilot.log 2>&1 &
-echo $!  # Get PID for monitoring
+source venv/bin/activate
+nohup python learn/autopilot.py > /tmp/autopilot.log 2>&1 &
+echo "PID: $!"
 ```
+
+**Real-Time Monitor (WebSocket - auto TP/SL):**
+```bash
+source venv/bin/activate
+nohup python realtime_monitor.py > /tmp/realtime.log 2>&1 &
+echo "PID: $!"
+```
+
+**Run both for full automation:**
+```bash
+# Autopilot: scans markets, opens positions
+# Monitor: watches positions, closes on TP/SL
+```
+
+---
+
+## File Structure
+
+```
+psyduck-trading-bot/
+├── SKILL.md                    # This file (for AI agents)
+├── README.md                   # Quick overview
+├── requirements.txt            # Python dependencies
+├── config.py.example           # Configuration template
+├── setup_check.py             # Verify setup
+├── learn/
+│   ├── autopilot.py            # Market scanner + auto-trade
+│   └── realtime_monitor.py     # WebSocket TP/SL monitor
+└── .gitignore
+```
+
+---
+
+## Key Features
+
+### 1. Autopilot - Market Scanner
+- Scans 300+ USDT pairs for opportunities
+- Long when RSI < 40 + MACD cross up
+- Short when RSI > 60 + MACD cross down
+- Auto-opens positions with 15% risk per trade
+
+### 2. Real-Time Monitor - WebSocket Based
+- **<100ms price updates** (vs 2-minute polling)
+- **Auto-detects new positions** every 30 seconds
+- **Auto-adds** new coins to WebSocket stream
+- **Instant TP/SL execution** when levels hit
+- No manual intervention needed
+
+### 3. PnL Tracking
+- All values in **USD** (not percentage)
+- Real-time balance updates
+- Per-position and total PnL
 
 ---
 
 ## Usage Commands
 
-### Check Positions
+### Check PnL (USD)
 ```python
-# Get current PnL for all positions
-python3 << 'EOF'
 import hmac, hashlib, time, requests
 
 API_KEY = "your_key"
@@ -97,33 +133,36 @@ def signed_get(endpoint):
     ts = int(time.time() * 1000)
     q = f"timestamp={ts}"
     sig = hmac.new(API_SECRET.encode(), q.encode(), hashlib.sha256).hexdigest()
-    return requests.get(f"{FUTURES_URL}{endpoint}?{q}&signature={sig}", 
+    return requests.get(f"{FUTURES_URL}{endpoint}?{q}&signature={sig}",
         headers={"X-MBX-APIKEY": API_KEY}, timeout=15).json()
 
+bal = signed_get("/fapi/v2/account")
+usdt = float(bal['availableBalance'])
 pos = signed_get("/fapi/v2/positionRisk")
+total_pnl = 0
+
 for p in pos:
     if float(p['positionAmt']) != 0:
-        print(f"{p['symbol']}: ${float(p['unRealizedProfit']):+.2f}")
-EOF
+        pnl = float(p['unRealizedProfit'])
+        total_pnl += pnl
+        print(f"{p['symbol']}: ${pnl:+.2f}")
+
+print(f"\nBalance: ${usdt:.2f}")
+print(f"Total PnL: ${total_pnl:+.2f}")
 ```
 
-### Open Position (Long)
+### Open Position
 ```python
-# Example: Open LONG on a coin
 def open_position(symbol, side, qty):
+    # side: "BUY" for LONG, "SELL" for SHORT
     data = {
         "symbol": symbol,
-        "side": side,  # BUY or SELL
+        "side": side,
         "type": "MARKET",
         "quantity": qty
     }
-    # Sign and send order...
+    # Sign and send via /fapi/v1/order
 ```
-
-### Monitor SL/TP
-The bot automatically:
-- Closes position if price hits SL (-2.5%)
-- Closes position if price hits TP (+5%)
 
 ---
 
@@ -131,48 +170,13 @@ The bot automatically:
 
 | Indicator | Long Signal | Short Signal |
 |-----------|-------------|--------------|
-| RSI | < 40 | > 60 |
-| MACD | Cross up | Cross down |
-| ADX | > 25 | > 25 |
-| Volume | > 1.5x avg | > 1.5x avg |
+| RSI | < 40 (+4) | > 60 (+4) |
+| MACD | Cross up (+3) | Cross down (+3) |
+| Price vs EMA20 | Above (+2) | Below (+2) |
+| Volume Spike | > 1.5x (+2) | > 1.5x (+2) |
+| Momentum | Negative (+2) | Positive (+2) |
 
-**Minimum Score:** 5 for entry
-
----
-
-## Coin Universe (Dynamic)
-
-The scanner automatically fetches **all available USDT perpetuals** from Binance. No fixed list needed.
-
-### Default Priority Coins (High Liquidity)
-```
-BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK,
-ALGO, FIL, VET, AAVE, GRT, PEPE, WIF, BONK, NEIRO, SUI,
-SEI, TIA, JUP, PYTH, OP, RNDR, AXL, INJ, SAGA, JTO
-```
-
-### Dynamic Scanning
-The bot scans **all USDT-M futures pairs** dynamically:
-```python
-# Get all USDT pairs automatically
-r = requests.get("https://api.binance.com/api/v3/exchangeInfo")
-all_coins = [s['symbol'] for s in r.json()['symbols'] 
-             if s['symbol'].endswith('USDT') and s['status'] == 'TRADING']
-# Result: 300+ coins available
-```
-
-### Custom Universe (Optional)
-Override in `config.py`:
-```python
-# Scan specific coins only
-COINS = ["BTC", "ETH", "SOL", "PEPE", "WIF"]  # Or None for ALL
-
-# Or use top movers only
-SCAN_MODE = "top_movers"  # "all" | "whitelist" | "top_movers"
-
-# Volume filter
-MIN_VOLUME_24H = 1_000_000  # USDT
-```
+**Minimum Score to Enter:** 5
 
 ---
 
@@ -184,64 +188,104 @@ MIN_VOLUME_24H = 1_000_000  # USDT
 | Take Profit | +5% |
 | Max Positions | 5 |
 | Risk per Trade | 15% of balance |
-| Leverage | 20x (demo) |
+| Leverage | 20x (testnet) |
+
+---
+
+## WebSocket Monitor Flow
+
+```
+┌─────────────────────────────────────────────────────┐
+│  1. Load positions from API                        │
+│  2. Setup WebSocket stream for all symbols          │
+│  3. Monitor price in REAL-TIME (<100ms)            │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  Every 30 seconds:                          │   │
+│  │  - Check for new positions                  │   │
+│  │  - Auto-add new coins to stream             │   │
+│  │  - Auto-remove closed positions             │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  When TP or SL hit:                                │
+│  → Instant MARKET order to close                   │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## Coin Universe (Dynamic)
+
+No fixed list. Scanner fetches all available USDT-M futures pairs dynamically.
+
+**Default priority coins:**
+```
+BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK,
+ALGO, FIL, VET, AAVE, GRT, PEPE, WIF, BONK, NEIRO, SUI,
+SEI, TIA, JUP, PYTH, OP, RNDR, AXL, INJ, SAGA, JTO
+```
+
+**Override in config:**
+```python
+COINS = None              # None = all coins
+COINS = ["BTC", "ETH"]   # Or specific list
+SCAN_MODE = "all"         # "all" | "whitelist" | "top_movers"
+```
 
 ---
 
 ## Troubleshooting
 
-### Order Failed: -4120
-Demo API doesn't support SL/TP orders via API. Bot handles SL/TP manually by monitoring price levels.
-
 ### Module not found
 ```bash
-source ~/trading-bot/trading-bot-venv/bin/activate
-pip install pandas pandas_ta requests
+pip install -r requirements.txt
 ```
 
 ### Check Bot Status
 ```bash
+# Autopilot log
 tail -f /tmp/autopilot.log
+
+# Real-time monitor log
+tail -f /tmp/realtime.log
+```
+
+### Restart Monitor
+```bash
+pkill -f "realtime_monitor"
+source venv/bin/activate
+nohup python realtime_monitor.py > /tmp/realtime.log 2>&1 &
 ```
 
 ---
 
 ## For Multi-User Access
 
-### Share with Team
-
-1. **GitHub Backup:**
-   ```bash
-   cd ~/.openclaw/workspace
-   git add trading-bot/
-   git commit -m "Trading bot setup"
-   git push
-   ```
-
-2. **Install on another machine:**
-   ```bash
-   git clone https://github.com/your-repo/openclaw-backup.git
-   cd openclaw-backup
-   python3 -m venv trading-bot-venv
-   source trading-bot-venv/bin/activate
-   pip install pandas pandas_ta requests
-   ```
-
-3. **Update API keys** in config.py for each user
+### Install on Another Machine
+```bash
+git clone https://github.com/dinarsanjaya/psyduck-trading-bot.git
+cd psyduck-trading-bot
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp config.py.example config.py
+# Edit config.py with your API keys
+```
 
 ### OpenClaw Skill Sync
-To make this skill available to other OpenClaw agents:
 ```bash
-cp -r ~/trading-bot ~/.openclaw/workspace/skills/binance-futures/
+cp -r psyduck-trading-bot ~/.openclaw/workspace/skills/binance-futures/
+openclaw gateway restart
 ```
 
 ---
 
 ## Notes
 
-- **Demo Only:** This setup uses Binance testnet. No real money.
-- **Professor Mode:** Bot executes autonomously, alerts on trades only.
-- **Paper Trading:** Good for learning before real account.
+- **Demo Only:** Uses Binance testnet. No real money.
+- **Paper Trading:** Good for learning before live account.
+- **Real-Time:** WebSocket gives <100ms updates, not 2-minute polling
+- **Auto-Update:** Monitor auto-detects new positions, no restart needed
 
 ---
 
@@ -249,14 +293,26 @@ cp -r ~/trading-bot ~/.openclaw/workspace/skills/binance-futures/
 
 ```
 User: check pnl
-Agent: [runs position check]
-  SEIUSDT: +1.44% (+$11.05) 🟢
-  NEIROUSDT: +1.44% (+$10.15) 🟢
-  Total PnL: +$37.06
+Agent:
+  SEIUSDT: +$7.73 🟢
+  NEIROUSDT: +$0.79
+  ALGOUSDT: +$8.40 🟢
+  VETUSDT: +$9.15 🟢
+  GRTUSDT: -$6.30 🔴
+  
+  Balance: $4,833
+  Total PnL: +$19.77
 
 User: open 1 more coin
-Agent: [scans opportunities]
-  Found ALGOUSDT - RSI 69 (overbought)
+Agent: [scans]
+  Found PEPE - RSI 72 (overbought) + pump 4%
   Opening SHORT...
-  ✅ ALGOUSDT SHORT opened @ $0.1217
+  ✅ PEPEUSDT SHORT opened @ $0.0000123
+  
+  [Monitor auto-updates, adds PEPE to WebSocket stream]
 ```
+
+---
+
+**Author:** Psyduck 🐤  
+**For OpenClaw AI Agents

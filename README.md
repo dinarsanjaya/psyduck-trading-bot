@@ -2,7 +2,7 @@
 
 > AI-powered automated trading bot for Binance Futures Demo/Testnet
 
-**For OpenClaw AI Agents** — Enables autonomous futures trading with LONG/SHORT strategies.
+**For OpenClaw AI Agents** — Enables autonomous futures trading with real-time WebSocket monitoring.
 
 ---
 
@@ -11,8 +11,9 @@
 - 🔍 Scans **300+ USDT perpetuals** dynamically
 - 📈 LONG when oversold (RSI < 40) + MACD cross up
 - 📉 SHORT when overbought (RSI > 60) + MACD cross down
-- 🛡️ Auto Stop Loss (-2.5%) & Take Profit (+5%)
-- 📊 Real-time PnL monitoring
+- ⚡ **Real-time monitoring** via WebSocket (<100ms updates)
+- 🛡️ Auto **Stop Loss (-2.5%)** & **Take Profit (+5%)**
+- 📊 **PnL in USD** (not percentage)
 - 🤖 Professor Mode: executes autonomously, alerts on trades only
 
 ---
@@ -20,28 +21,50 @@
 ## Quick Setup
 
 ```bash
-# 1. Clone this repo
+# 1. Clone
 git clone https://github.com/dinarsanjaya/psyduck-trading-bot.git
 cd psyduck-trading-bot
 
-# 2. Install dependencies
+# 2. Install
 python3 -m venv venv
-source venv/bin/activate        # Linux/Mac
-# venv\Scripts\activate         # Windows
+source venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Configure API keys
+# 3. Configure
 cp config.py.example config.py
-# Edit config.py and add your API keys from https://demo.binance.com/
+# Edit config.py with your API keys
 
-# 4. Verify setup
-python setup_check.py
+# 4. Run both components
+nohup python learn/autopilot.py > /tmp/autopilot.log 2>&1 &
+nohup python realtime_monitor.py > /tmp/realtime.log 2>&1 &
 ```
 
-### Get Binance Testnet API Keys
-1. Web: https://demo.binance.com/ (official demo platform)
-2. API: `https://demo-fapi.binance.com`
-3. Get API Keys from: https://www.binance.com/en/futures → API Management
+### Get API Keys
+1. Web: https://demo.binance.com/
+2. API: https://demo-fapi.binance.com
+3. Get keys: https://www.binance.com/en/futures → API Management
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    BINANCE FUTURES BOT                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐      ┌──────────────────────────────┐   │
+│  │  AUTOPILOT   │      │    REALTIME MONITOR          │   │
+│  │  (Scanner)   │      │    (WebSocket)               │   │
+│  │              │      │                              │   │
+│  │  • Scanning  │      │  • <100ms price updates      │   │
+│  │  • Signals   │      │  • Auto-detect positions     │   │
+│  │  • Open pos  │────▶│  • Auto-add/remove coins     │   │
+│  │              │      │  • Instant TP/SL execution   │   │
+│  └──────────────┘      └──────────────────────────────┘   │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -49,24 +72,46 @@ python setup_check.py
 
 ```
 psyduck-trading-bot/
-├── SKILL.md            # Main skill documentation (for AI agents)
-├── README.md           # This file
-├── requirements.txt    # Python dependencies
-├── config.py.example   # Configuration template
-└── setup_check.py      # Setup verification script
+├── SKILL.md                    # Full documentation (for AI)
+├── README.md                   # This file
+├── requirements.txt            # Dependencies
+├── config.py.example           # Config template
+├── setup_check.py              # Setup verifier
+├── learn/
+│   ├── autopilot.py            # Market scanner + auto-trade
+│   └── realtime_monitor.py     # WebSocket TP/SL monitor
+└── .gitignore
 ```
+
+---
+
+## Key Features
+
+### Real-Time WebSocket Monitor
+- **<100ms price updates** — no 2-minute polling lag
+- **Auto-detects new positions** every 30 seconds
+- **Auto-adds new coins** to WebSocket stream
+- **Instant TP/SL execution** when levels hit
+- **Silent operation** — only logs on TP/SL trigger
+
+### Autopilot Scanner
+- Scans 300+ USDT pairs
+- LONG/SHORT with RSI + MACD + ADX + Volume
+- Auto risk management (2.5% SL, 5% TP)
+- 15% risk per trade, max 5 positions
+
+### PnL in USD
+- All values shown in USD
+- Real-time balance tracking
+- Per-position and total PnL
 
 ---
 
 ## Usage
 
-### Run Setup Check
+### Check PnL
 ```bash
-python setup_check.py
-```
-
-### Check Positions (Manual)
-```python
+python3 << 'EOF'
 import hmac, hashlib, time, requests
 
 API_KEY = "your_key"
@@ -80,11 +125,20 @@ def signed_get(endpoint):
     return requests.get(f"{FUTURES_URL}{endpoint}?{q}&signature={sig}",
         headers={"X-MBX-APIKEY": API_KEY}, timeout=15).json()
 
-# Get all positions
+bal = signed_get("/fapi/v2/account")
+usdt = float(bal['availableBalance'])
 pos = signed_get("/fapi/v2/positionRisk")
+total_pnl = 0
+
 for p in pos:
     if float(p['positionAmt']) != 0:
-        print(f"{p['symbol']}: ${float(p['unRealizedProfit']):+.2f}")
+        pnl = float(p['unRealizedProfit'])
+        total_pnl += pnl
+        print(f"{p['symbol']}: ${pnl:+.2f}")
+
+print(f"\nBalance: ${usdt:.2f}")
+print(f"Total PnL: ${total_pnl:+.2f}")
+EOF
 ```
 
 ### Open Position
@@ -102,20 +156,19 @@ def open_position(symbol, side, qty):
 
 ---
 
-## Configuration Options
+## Configuration
 
 Edit `config.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `STOP_LOSS_PCT` | 2.5 | Stop loss percentage |
-| `TAKE_PROFIT_PCT` | 5.0 | Take profit percentage |
-| `RISK_PER_TRADE` | 0.15 | 15% of balance per trade |
-| `MAX_POSITIONS` | 5 | Max concurrent positions |
-| `LEVERAGE` | 20 | Leverage multiplier |
-| `INTERVAL` | 120 | Seconds between scans |
-| `SCAN_MODE` | "all" | "all" \| "whitelist" \| "top_movers" |
-| `COINS` | None | None = all, or list specific coins |
+| `STOP_LOSS_PCT` | 2.5 | Stop loss % |
+| `TAKE_PROFIT_PCT` | 5.0 | Take profit % |
+| `RISK_PER_TRADE` | 0.15 | 15% of balance |
+| `MAX_POSITIONS` | 5 | Max concurrent |
+| `LEVERAGE` | 20 | Leverage |
+| `INTERVAL` | 120 | Scan interval (sec) |
+| `SCAN_MODE` | "all" | all/whitelist/top_movers |
 
 ---
 
@@ -129,9 +182,9 @@ Edit `config.py`:
 | MACD Cross | Up (+3) | Down (+3) |
 | Price vs EMA20 | Above (+2) | Below (+2) |
 | Volume Spike | > 1.5x (+2) | > 1.5x (+2) |
-| 1h/4h Momentum | Negative (+2) | Positive (+2) |
+| Momentum | Negative (+2) | Positive (+2) |
 
-**Minimum Score to Enter:** 5
+**Minimum Score:** 5 to enter
 
 ### Risk Management
 
@@ -140,48 +193,42 @@ Edit `config.py`:
 | Stop Loss | -2.5% |
 | Take Profit | +5% |
 | Max Positions | 5 |
-| Risk per Trade | 15% of balance |
+| Risk per Trade | 15% |
 | Leverage | 20x (testnet) |
 
 ---
 
-## For OpenClaw Agents
+## Example Session
 
-When you load this skill, you gain the ability to:
-
-1. **Scan markets** — Find opportunities across 300+ USDT pairs
-2. **Execute trades** — Open LONG/SHORT with market orders
-3. **Monitor positions** — Track PnL, SL/TP levels
-4. **Auto-manage risk** — Close positions when SL/TP hit
-
-### Loading the Skill
 ```
-Read SKILL.md in this directory for full implementation details.
-```
-
-### Example Session
-```
-User: open 1 coin
-Agent: Scanning opportunities...
-  Found PEPE - RSI 72 (overbought) + pump 4%
-  Opening SHORT...
-  ✅ PEPEUSDT SHORT @ $0.0000123
-  
 User: check pnl
 Agent:
-  PEPEUSDT: +2.1% (+$15.42) 🟢
-  BTCUSDT: -0.3% (-$2.10)
-  Total PnL: +$13.32
+  SEIUSDT: +$7.73 🟢
+  ALGOUSDT: +$8.40 🟢
+  VETUSDT: +$9.15 🟢
+  NEIROUSDT: +$0.79
+  GRTUSDT: -$6.30 🔴
+  
+  Balance: $4,833
+  Total PnL: +$19.77
+
+User: open 1 more coin
+Agent: Scanning...
+  Found PEPE - RSI 72 + pump 4%
+  Opening SHORT...
+  ✅ PEPEUSDT SHORT opened
+  
+  [Monitor auto-adds PEPE to stream]
 ```
 
 ---
 
 ## ⚠️ Disclaimer
 
-- **Demo/Testnet Only** — No real money involved
-- Paper trading for learning purposes
-- Always review strategies before live trading
-- Backtest before applying to real accounts
+- **Demo/Testnet Only** — No real money
+- Paper trading for learning
+- Always review before live trading
+- Backtest strategies first
 
 ---
 
