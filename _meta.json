@@ -1,8 +1,0 @@
-{
-  "name": "binance-futures",
-  "description": "Binance Futures trading bot with risk management",
-  "version": "1.0.0",
-  "author": "psyduck",
-  "tags": ["binance", "futures", "trading", "crypto"],
-  "runtime": "node"
-}

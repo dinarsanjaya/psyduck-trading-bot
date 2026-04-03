@@ -36,12 +36,10 @@ pip install pandas pandas_ta requests
 ```
 
 ### Get Binance Testnet API Keys
-1. Go to https://www.binance.com/en/futures
-2. Login → Futures → USD-M Futures
-3. API Management → Create API (testnet mode auto-enabled)
-4. Or use direct testnet API: `https://demo-fapi.binance.com`
-
-**Note:** testnet.binance.gov is deprecated. Use demo-fapi.binance.com API endpoint.
+1. Web: https://demo.binance.com/ (official demo platform)
+2. API: `https://demo-fapi.binance.com`
+3. Get API Keys from: https://www.binance.com/en/futures → API Management
+4. Login with demo account or link your main account for testnet
 
 ---
 

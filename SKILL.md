@@ -19,9 +19,9 @@ This skill enables AI agents to:
 ## Prerequisites
 
 1. **Binance Demo Account** (testnet)
-   - API Endpoint: `https://demo-fapi.binance.com` (still active)
+   - Web: https://demo.binance.com/ (official demo trading platform)
+   - API: `https://demo-fapi.binance.com`
    - Get API Keys from: https://www.binance.com/en/futures → API Management
-   - Note: testnet.binance.gov is deprecated, use mainnet Binance with testnet mode
 
 2. **Python 3.8+** with dependencies:
    ```
