@@ -498,6 +498,15 @@ def scan_cycle():
     global latest_tickers, ticker_history, last_alert, board_cycle
 
     try:
+        # Fetch account balance for position sizing
+        try:
+            from trading import get_account, get_positions
+            acc_bal = next((a for a in get_account() if a.get("asset")=="USDT"), {})
+            open_pos_check = True
+        except:
+            acc_bal = {}
+            open_pos_check = False
+
         # Fetch all tickers (one API call)
         all_tickers = fetch_all_tickers()
         usdt = {s: t for s, t in all_tickers.items() if s.endswith("USDT")}
@@ -574,28 +583,67 @@ def scan_cycle():
         with open(LIVE_DATA_FILE, "w") as f:
             json.dump(board_data, f)
 
-        # Send alerts for new signals
+        # ── Signal entry: notify + immediate order ──
+        positions = get_positions() if open_pos_check else None
+        open_syms = {p["symbol"] for p in positions} if positions else set()
+        open_count = len(open_syms)
+
         for sym, ticker in top[:len(COINS_WHITELIST)]:
+            if open_count >= MAX_POSITIONS: break
+            if sym in open_syms: continue
+
             sig = check_signal(sym, ticker, klines_cache)
-            if sig:
-                last_alert[sym] = now
-                
-                # Dynamic SL
-                if USE_DYNAMIC_SL and sig.get("atr"):
-                    atr_pct = sig["atr"] / sig["price"] * 100
-                    sl_pct = max(atr_pct * STOP_LOSS_ATR_MULT, STOP_LOSS_PCT_FALLBACK)
+            if not sig: continue
+
+            last_alert[sym] = now
+            open_count += 1  # optimistic count
+
+            # Dynamic SL
+            if USE_DYNAMIC_SL and sig.get("atr"):
+                atr_pct = sig["atr"] / sig["price"] * 100
+                sl_pct = max(atr_pct * STOP_LOSS_ATR_MULT, STOP_LOSS_PCT_FALLBACK)
+            else:
+                sl_pct = STOP_LOSS_PCT
+
+            sl = sig["price"] * (1-sl_pct/100) if sig["signal"]=="LONG" else sig["price"] * (1+sl_pct/100)
+            tp = sig["price"] * (1+TAKE_PROFIT_PCT/100) if sig["signal"]=="LONG" else sig["price"] * (1-TAKE_PROFIT_PCT/100)
+            emoji = "🟢" if sig["signal"]=="LONG" else "🔴"
+
+            # ── Immediate MARKET order ──
+            from trading import place_order, set_leverage, calc_quantity_from_risk
+            try:
+                set_leverage(sym, LEVERAGE)
+                qty = calc_quantity_from_risk(sym, float(acc_bal.get("availableBalance", 0)) if acc_bal else 4000, sig["price"], STOP_LOSS_PCT_FALLBACK, LEVERAGE)
+                if qty <= 0: continue
+
+                side = "BUY" if sig["signal"] == "LONG" else "SELL"
+                result = place_order(sym, side, "MARKET", qty)
+
+                if result and result.get("orderId"):
+                    fills = result.get("fills", [{}])
+                    avg_price = float(fills[0].get("price", sig["price"])) if fills else sig["price"]
+                    print(f"\n{'='*55}")
+                    print(f"  🚨 ENTRY: {sym} {sig['signal']} @ ${avg_price}")
+                    print(f"     Qty: {qty} | Lev: {LEVERAGE}x | Conf: {sig['confidence']}/9")
+                    print(f"     RSI: {sig['rsi']} | Mom: {sig['mom5']:+.2f}% | Vol: {sig['vol_ratio']}")
+                    print(f"     SL: ${sl:.4f} | TP: ${tp:.4f}")
+                    print(f"{'='*55}")
+                    discord_notify(
+                        f"✅ ENTRY: {sym} {sig['signal']} — MARKET FILLED",
+                        f"**Price:** `${avg_price}`\n**Qty:** `{qty}`\n**Leverage:** {LEVERAGE}x\n**Conf:** {sig['confidence']}/9\n**RSI:** `{sig['rsi']}` | **Mom:** `{sig['mom5']:+.2f}%`\n**SL:** `${sl:.4f}` | **TP:** `${tp:.4f}`",
+                        color=0x00FF00 if sig["signal"]=="LONG" else 0xFF4444
+                    )
                 else:
-                    sl_pct = STOP_LOSS_PCT
-                
-                sl = sig["price"] * (1-sl_pct/100) if sig["signal"]=="LONG" else sig["price"] * (1+sl_pct/100)
-                tp = sig["price"] * (1+TAKE_PROFIT_PCT/100) if sig["signal"]=="LONG" else sig["price"] * (1-TAKE_PROFIT_PCT/100)
-                emoji = "🟢" if sig["signal"]=="LONG" else "🔴"
-                discord_notify(
-                    f"{emoji} SIGNAL: {sym} {sig['signal']}",
-                    f"**Price:** `${sig['price']}`\n**Reason:** {sig['reason']}\n**RSI:** `{sig['rsi']}` | **Mom:** `{sig['mom5']:+.2f}%`\n**Conf:** {sig['confidence']}/9\n**SL:** `${sl:.4f}` ({sl_pct:.1f}%) | **TP:** `${tp:.4f}`",
-                    color=0x00FF00 if sig["signal"]=="LONG" else 0xFF4444
-                )
-                print(f"  🚨 SIGNAL: {sym} {sig['signal']} @ ${sig['price']} | {sig['reason']}")
+                    print(f"  ❌ ORDER FAILED: {sym} {sig['signal']} — no fill")
+                    discord_notify(
+                        f"❌ ORDER FAILED: {sym} {sig['signal']}",
+                        f"**Price:** `${sig['price']}`\n**Conf:** {sig['confidence']}/9\n**Status:** Order not filled",
+                        color=0xFF4444
+                    )
+            except Exception as e:
+                print(f"  ❌ ENTRY ERROR: {sym}: {e}")
+
+            time.sleep(1)
 
         # Update Discord board with open positions
         try:
