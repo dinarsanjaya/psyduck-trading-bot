@@ -28,7 +28,7 @@ from config import (
 from proxies import get_proxy, get_proxy_dict, reset_proxy
 reset_proxy()
 
-CHANNEL_ID = "1412841283315302543"
+CHANNEL_ID = "1458172006121083113"
 BOARD_MSG_FILE = "/home/clore/.openclaw/workspace/trading-bot/board_msg_id.txt"
 LIVE_DATA_FILE = "/home/clore/.openclaw/workspace/trading-bot/live_board_data.json"
 SCAN_INTERVAL = 10   # seconds between full scans
