@@ -17,7 +17,9 @@ from collections import defaultdict
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 from config import (
-    DISCORD_BOT_TOKEN, DISCORD_WEBHOOK, STOP_LOSS_PCT, TAKE_PROFIT_PCT,
+    DISCORD_BOT_TOKEN, DISCORD_SIGNAL_WEBHOOK_URL, DISCORD_BOARD_CHANNEL_ID,
+    DISCORD_SIGNAL_CHANNEL_ID, DISCORD_API_URL,
+    STOP_LOSS_PCT, TAKE_PROFIT_PCT,
     RISK_PER_TRADE, MAX_POSITIONS, LEVERAGE, INTERVAL, API_KEY, API_SECRET, FUTURES_URL as BASE_URL,
     COINS_WHITELIST, COIN_UNIVERSE, MIN_VOLUME_24H,
     RSI_OVERSOLD, RSI_OVERBOUGHT, MOM_THRESHOLD, VOL_RATIO_MIN, CONF_ALERT,
@@ -28,14 +30,13 @@ from config import (
 from proxies import get_proxy, get_proxy_dict, reset_proxy
 reset_proxy()
 
-CHANNEL_ID = "1458172006121083113"
 BOARD_MSG_FILE = "/home/clore/.openclaw/workspace/trading-bot/board_msg_id.txt"
 LIVE_DATA_FILE = "/home/clore/.openclaw/workspace/trading-bot/live_board_data.json"
 SCAN_INTERVAL = 3   # seconds between full scans
 SLTP_INTERVAL = 30   # seconds between SL/TP checks
 AUTOPILOT_INTERVAL = 600  # 10 minutes
 
-DISCORD_API = "https://discord.com/api/v10"
+DISCORD_API = DISCORD_API_URL
 
 ALERT_COOLDOWN = 90   # seconds between alerts per symbol (longer to avoid overtrading)
 HISTORY_CANDLES = 50  # more candles for better EMA/RSI accuracy
@@ -45,6 +46,92 @@ latest_tickers = {}
 ticker_history = defaultdict(list)
 last_alert = {}
 board_cycle = 0
+
+# ─── SELF-HEALING STATE ───────────────────────────────────────────────────────
+consecutive_proxy_errors = 0
+consecutive_scan_errors = 0
+autopilot_paused_until = 0
+last_health_check = 0
+HEALTH_CHECK_INTERVAL = 60
+PROXY_ERROR_THRESHOLD = 3
+SCAN_ERROR_THRESHOLD = 5
+AUTOPILOT_COOLDOWN = 300
+MAX_DRAWDOWN_PCT = -10
+
+# ─── SELF-HEALING FUNCTIONS ───────────────────────────────────────────────────
+
+def self_heal_proxy():
+    global consecutive_proxy_errors
+    consecutive_proxy_errors += 1
+    if consecutive_proxy_errors >= PROXY_ERROR_THRESHOLD:
+        print(f"[SELF-HEAL] Proxy errors ({consecutive_proxy_errors}) >= {PROXY_ERROR_THRESHOLD} — resetting proxy")
+        try:
+            reset_proxy()
+            consecutive_proxy_errors = 0
+            return True
+        except:
+            return False
+    return False
+
+def self_heal_circuit_breaker():
+    global consecutive_scan_errors, autopilot_paused_until
+    consecutive_scan_errors += 1
+    if consecutive_scan_errors >= SCAN_ERROR_THRESHOLD and autopilot_paused_until == 0:
+        pause_until = time.time() + AUTOPILOT_COOLDOWN
+        autopilot_paused_until = pause_until
+        print(f"[SELF-HEAL] Scan errors ({consecutive_scan_errors}) >= {SCAN_ERROR_THRESHOLD} — pausing autopilot for {AUTOPILOT_COOLDOWN}s")
+        discord_notify(
+            f"⚠️ Autopilot PAUSED — {consecutive_scan_errors} consecutive errors",
+            f"Autopilot will auto-resume in ~{AUTOPILOT_COOLDOWN//60} minutes.\nScanning continues normally.",
+            color=0xFFAA00
+        )
+        return True
+    return False
+
+def self_heal_check_drawdown(positions):
+    try:
+        from trading import get_account
+        acc = get_account()
+        total_balance = next((float(a.get("balance", 0)) + float(a.get("availableBalance", 0)) for a in acc if a.get("asset") == "USDT"), 0)
+        if total_balance <= 0:
+            return False
+        
+        open_pos = [p for p in positions if float(p.get("positionAmt", 0)) != 0]
+        total_pnl = sum(float(p.get("unRealizedProfit", 0)) for p in open_pos)
+        total_notional = sum(abs(float(p.get("positionAmt", 0)) * float(p.get("entryPrice", 1))) for p in open_pos)
+        
+        if total_notional > 0:
+            drawdown_pct = (total_pnl / total_notional) * 100
+            if drawdown_pct < MAX_DRAWDOWN_PCT:
+                print(f"[SELF-HEAL] Drawdown alert: {drawdown_pct:.1f}% < {MAX_DRAWDOWN_PCT}%")
+                discord_notify(
+                    f"🚨 DRAWDOWN ALERT — {drawdown_pct:.1f}%",
+                    f"Total PnL: `${total_pnl:+.2f}`\nNotional: `${total_notional:.2f}`\nBalance: `${total_balance:.2f}`",
+                    color=0xFF0000
+                )
+                return True
+    except:
+        pass
+    return False
+
+def self_heal_health_check():
+    global last_health_check, consecutive_scan_errors, consecutive_proxy_errors, autopilot_paused_until
+    now = time.time()
+    
+    if now - last_health_check < HEALTH_CHECK_INTERVAL:
+        return
+    last_health_check = now
+    
+    # Check if autopilot should resume
+    if autopilot_paused_until > 0 and now >= autopilot_paused_until:
+        print(f"[SELF-HEAL] Autopilot cooldown expired — resuming")
+        autopilot_paused_until = 0
+        consecutive_scan_errors = 0
+        discord_notify("✅ Autopilot RESUMED", "Self-healing complete. Autopilot is active again.", color=0x00FF00)
+    
+    # Reset error counters on success
+    consecutive_proxy_errors = 0
+    consecutive_scan_errors = 0
 
 # ─── DISCORD ─────────────────────────────────────────────────────────────────
 
@@ -79,10 +166,12 @@ def discord_notify(title, description, color=0xFFAA00):
             "footer": {"text": f"Professor Mode 🐤 | {datetime.now(pytz.timezone('Asia/Jakarta')).strftime('%H:%M:%S WIB')}"}
         }]
     }
-    url = f"{DISCORD_API}/channels/{CHANNEL_ID}/messages"
-    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
     try:
-        requests.post(url, json=payload, headers=headers, timeout=10)
+        r = requests.post(DISCORD_SIGNAL_WEBHOOK_URL, json=payload, timeout=10)
+        if r.status_code not in (200, 204):
+            url = f"{DISCORD_API}/channels/{DISCORD_SIGNAL_CHANNEL_ID}/messages"
+            headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
+            requests.post(url, json=payload, headers=headers, timeout=10)
     except:
         pass
 
@@ -96,10 +185,18 @@ def fetch_all_tickers():
 
 def fetch_klines(symbol, limit=HISTORY_CANDLES):
     url = f"{BASE_URL}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": symbol, "interval": "1m", "limit": limit},
-                    proxies=get_proxy_dict(), timeout=10)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params={"symbol": symbol, "interval": "1m", "limit": limit},
+                            proxies=get_proxy_dict(), timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if attempt < 2:
+                self_heal_proxy()
+            else:
+                raise
+    return None
 
 def get_positions():
     from trading import get_positions as gp
@@ -233,21 +330,27 @@ def build_board_embed(data, positions=None):
     spikes = [r for r in rows if r.get("signal") == "⚡SPIKE"]
     fades  = [r for r in rows if r.get("signal") == "📉FADE"]
 
-    def fmt(r, icon):
+    def fmt(r):
         ema = r.get("ema")
         ema_str = f" | EMA `${ema:.4f}`" if ema else ""
-        return f'{icon} **{r["symbol"]}** `${r["price"]}` {r.get("arrow","▲")}{abs(r["change_pct"]):.2f}% | RSI `{r["rsi"]:.0f}` | Mom `{r["mom5"]:+.2f}%`{ema_str}'
+        arrow = r.get("arrow","▲")
+        chg = r.get("change_pct", 0)
+        arrow_str = f"{arrow}{abs(chg):.2f}%"
+        return f'`{r["symbol"]}` {arrow_str} RSI `{r["rsi"]:.0f}` Mom `{r["mom5"]:+.2f}%`{ema_str}'
 
     sections = []
     if longs:
         longs.sort(key=lambda x: -x["mom5"])
-        sections.append(("🟢 LONG Signals", [fmt(r,"🟢") for r in longs[:5]], 0x00FF00))
-    if spikes:
-        spikes.sort(key=lambda x: -x["vol_ratio"])
-        sections.append(("⚡ VOLUME Spike", [fmt(r,"⚡") for r in spikes[:5]], 0xFFD700))
+        lines = [f'🟢 {fmt(r)}' for r in longs[:8]]
+        sections.append(("🟢 LONG", lines, 0x00FF00))
     if fades:
         fades.sort(key=lambda x: -abs(x["mom5"]))
-        sections.append(("🔴 SHORT Signals", [fmt(r,"🔴") for r in fades[:5]], 0xFF4444))
+        lines = [f'🔴 {fmt(r)}' for r in fades[:8]]
+        sections.append(("🔴 SHORT", lines, 0xFF4444))
+    if spikes:
+        spikes.sort(key=lambda x: -x["vol_ratio"])
+        lines = [f'⚡ {fmt(r)}' for r in spikes[:8]]
+        sections.append(("⚡ SPIKE", lines, 0xFFD700))
 
     # Build description
     if not sections:
@@ -262,37 +365,36 @@ def build_board_embed(data, positions=None):
         color = 0x00FF00 if longs and not fades else (0xFF4444 if fades else 0x555555)
 
     total = len(longs)+len(spikes)+len(fades)
+    open_pos = [p for p in positions if float(p.get("positionAmt", 0)) != 0] if positions else []
 
     # Add open positions section
     fields = [
-        {"name": "🎯 Config", "value": f"SL: `{STOP_LOSS_PCT}%`/ATR | TP1: `{TP_1_RATIO}x` TP2: `{TP_2_RATIO}x` | Lev: `{LEVERAGE}x`", "inline": True},
-        {"name": "📡 Scanner", "value": f"Whitelist: `{len(COINS_WHITELIST)}` coins | Signals: `{total}`", "inline": True}
+        {"name": "🎯 Config", "value": f"SL: `{STOP_LOSS_PCT}%`/ATR | TP: `{TP_1_RATIO}x`/`{TP_2_RATIO}x` | Lev: `{LEVERAGE}x` | Pos: `{len(open_pos)}/{MAX_POSITIONS}`", "inline": False},
+        {"name": "📡 Scanner", "value": f"Whitelist: `{len(COINS_WHITELIST)}` coins | `{ts}`", "inline": False}
     ]
 
     # Position fields
-    if positions:
-        open_pos = [p for p in positions if float(p.get("positionAmt", 0)) != 0]
-        if open_pos:
-            syms = [p["symbol"] for p in open_pos]
-            mark_prices = get_mark_prices(syms)
-            
-            pos_lines = []
-            total_pnl = 0.0
-            for p in open_pos:
-                amt = float(p["positionAmt"])
-                entry = float(p["entryPrice"])
-                sym = p["symbol"]
-                upnl = float(p.get("unRealizedProfit", 0))
-                mark = mark_prices.get(sym, entry)
-                side = "🟢LONG" if amt > 0 else "🔴SHORT"
-                emoji = "🟢" if upnl >= 0 else "🔴"
-                notional = entry * abs(amt)
-                pnl_pct = (upnl / notional) * 100 * LEVERAGE if notional > 0 else 0
-                pos_lines.append(f"{emoji} **{sym}** {side} `${abs(amt)}` | Mark `${mark:.2f}` | Entry `${entry:.2f}` | PnL `${upnl:+.2f}` ({pnl_pct:+.1f}%) | Lev `{LEVERAGE}x`")
-                total_pnl += upnl
+    if open_pos:
+        syms = [p["symbol"] for p in open_pos]
+        mark_prices = get_mark_prices(syms)
+        
+        pos_lines = []
+        total_pnl = 0.0
+        for p in open_pos:
+            amt = float(p["positionAmt"])
+            entry = float(p["entryPrice"])
+            sym = p["symbol"]
+            upnl = float(p.get("unRealizedProfit", 0))
+            mark = mark_prices.get(sym, entry)
+            side = "🟢LONG" if amt > 0 else "🔴SHORT"
+            emoji = "🟢" if upnl >= 0 else "🔴"
+            notional = entry * abs(amt)
+            pnl_pct = (upnl / notional) * 100 * LEVERAGE if notional > 0 else 0
+            pos_lines.append(f"{emoji} **{sym}** {side} `${abs(amt)}` | Mark `${mark:.2f}` | Entry `${entry:.2f}` | PnL `${upnl:+.2f}` ({pnl_pct:+.1f}%) | Lev `{LEVERAGE}x`")
+            total_pnl += upnl
 
-            fields.append({
-                "name": f"📊 Open Positions ({len(open_pos)}) | Total PnL: `{total_pnl:+.2f}`",
+        fields.append({
+            "name": f"📊 Open Positions ({len(open_pos)}) | Total PnL: `{total_pnl:+.2f}`",
                 "value": "\n".join(pos_lines),
                 "inline": False
             })
@@ -302,7 +404,7 @@ def build_board_embed(data, positions=None):
         "description": desc,
         "color": color,
         "fields": fields,
-        "footer": {"text": f"🟢 LIVE | Scan #{cycle} | {tracked} coins | {total} signals | {ts}"}
+        "footer": {"text": f"🟢 LIVE | Scan #{cycle} | {tracked} coins | {ts}"}
     }
 
 # ─── SL/TP WATCHDOG ─────────────────────────────────────────────────────────
@@ -401,6 +503,12 @@ def check_sl_tp():
                         color=color
                     )
                 time.sleep(0.5)
+        
+        # ── Drawdown check ──
+        try:
+            self_heal_check_drawdown(positions)
+        except:
+            pass
     except Exception as e:
         print(f"[SL/TP ERROR] {e}")
 
@@ -583,7 +691,7 @@ def scan_cycle():
 
         # ── Signal entry: notify + immediate order ──
         positions = get_positions() if open_pos_check else None
-        open_syms = {p["symbol"] for p in positions} if positions else set()
+        open_syms = {p["symbol"] for p in positions if float(p.get("positionAmt", 0)) != 0} if positions else set()
         open_count = len(open_syms)
 
         for sym, ticker in top[:len(COINS_WHITELIST)]:
@@ -651,12 +759,12 @@ def scan_cycle():
         embed = build_board_embed(board_data, positions)
         msg_id = get_board_msg_id()
         if msg_id:
-            result = discord_req("PATCH", f"/channels/{CHANNEL_ID}/messages/{msg_id}",
+            result = discord_req("PATCH", f"/channels/{DISCORD_BOARD_CHANNEL_ID}/messages/{msg_id}",
                                data={"content": None, "embeds": [embed]})
             if not result: msg_id = None
 
         if not msg_id:
-            result = discord_req("POST", f"/channels/{CHANNEL_ID}/messages",
+            result = discord_req("POST", f"/channels/{DISCORD_BOARD_CHANNEL_ID}/messages",
                                data={"content": None, "embeds": [embed]})
             if result and result.get("id"):
                 save_board_msg_id(result["id"])
@@ -666,10 +774,12 @@ def scan_cycle():
 
     except Exception as e:
         print(f"  [SCAN ERROR] {e}")
+        self_heal_circuit_breaker()
 
 # ─── ENTRY POINT ────────────────────────────────────────────────────────────
 
 def main():
+    global autopilot_paused_until, consecutive_scan_errors
     print(f"\n{'='*60}")
     print(f"  🐤 PROFESSOR MODE - Unified Trading System")
     print(f"  Config: SL={STOP_LOSS_PCT}% | TP={TAKE_PROFIT_PCT}% | Lev={LEVERAGE}x")
@@ -685,11 +795,24 @@ def main():
             # ── Scanner cycle ──
             scan_cycle()
 
-            # ── SL/TP check ──
+            # ── Health check (self-healing) ──
+            self_heal_health_check()
+
+            # ── SL/TP check + drawdown monitor ──
             check_sl_tp()
 
-            # ── Autopilot ──
-            if time.time() - last_autopilot >= AUTOPILOT_INTERVAL:
+            # ── Autopilot (if not paused) ──
+            if autopilot_paused_until > 0:
+                if time.time() >= autopilot_paused_until:
+                    autopilot_paused_until = 0
+                    consecutive_scan_errors = 0
+                    print("[AUTOPILOT] Resuming after cooldown")
+                    discord_notify("✅ Autopilot RESUMED", "Self-healing complete.", color=0x00FF00)
+                else:
+                    remaining = int(autopilot_paused_until - time.time())
+                    if int(time.time()) % 60 == 0:
+                        print(f"[AUTOPILOT] Paused — {remaining}s remaining")
+            elif time.time() - last_autopilot >= AUTOPILOT_INTERVAL:
                 run_autopilot()
                 last_autopilot = time.time()
 
