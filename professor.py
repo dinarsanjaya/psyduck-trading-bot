@@ -282,16 +282,14 @@ def build_board_embed(data, positions=None):
                 amt = float(p["positionAmt"])
                 entry = float(p["entryPrice"])
                 sym = p["symbol"]
+                upnl = float(p.get("unRealizedProfit", 0))
                 mark = mark_prices.get(sym, entry)
                 side = "🟢LONG" if amt > 0 else "🔴SHORT"
-                if amt > 0:
-                    pnl = (mark - entry) * amt
-                else:
-                    pnl = (entry - mark) * abs(amt)
-                emoji = "🟢" if pnl >= 0 else "🔴"
-                pnl_pct = (pnl / (entry * abs(amt))) * 100 * LEVERAGE if entry * abs(amt) > 0 else 0
-                pos_lines.append(f"{emoji} **{sym}** {side} `${abs(amt)}` | Mark `${mark:.2f}` | Entry `${entry:.2f}` | PnL `${pnl:+.2f}` ({pnl_pct:+.1f}%) | Lev `{LEVERAGE}x`")
-                total_pnl += pnl
+                emoji = "🟢" if upnl >= 0 else "🔴"
+                notional = entry * abs(amt)
+                pnl_pct = (upnl / notional) * 100 * LEVERAGE if notional > 0 else 0
+                pos_lines.append(f"{emoji} **{sym}** {side} `${abs(amt)}` | Mark `${mark:.2f}` | Entry `${entry:.2f}` | PnL `${upnl:+.2f}` ({pnl_pct:+.1f}%) | Lev `{LEVERAGE}x`")
+                total_pnl += upnl
 
             fields.append({
                 "name": f"📊 Open Positions ({len(open_pos)}) | Total PnL: `{total_pnl:+.2f}`",
