@@ -121,7 +121,7 @@ def place_order(symbol, side, order_type, quantity, price=None, stop_price=None)
 def market_close(symbol, side, quantity):
     params = {
         "symbol":     symbol,
-        "side":       "SELL" if side == "BUY" else "BUY",
+        "side":       side,
         "type":       "MARKET",
         "quantity":   quantity,
         "reduceOnly": "true",

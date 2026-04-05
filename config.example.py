@@ -14,7 +14,7 @@ FUTURES_URL = "https://testnet.binancefuture.com"
 STOP_LOSS_PCT = 2.5
 TAKE_PROFIT_PCT = 5.0
 RISK_PER_TRADE = 0.025  # 2.5% of balance per trade
-MAX_POSITIONS = 3  # Maximum concurrent positions
+MAX_POSITIONS = 10  # Maximum concurrent positions
 LEVERAGE = 20  # Leverage multiplier
 
 # Scanning Settings
