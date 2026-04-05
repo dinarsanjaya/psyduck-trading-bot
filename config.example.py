@@ -2,8 +2,8 @@
 # API Keys: generate at https://www.binance.com/en/my/settings/api-management (enable Testnet mode)
 # Testnet API keys are REQUIRED — demo keys don't fill orders.
 
-API_KEY = "mDpme0mI8m777Uam3XIdaXkZoG8g9aPEoBNObkoLYIWCygKMd4Cla3ktjpqG9Tmo"
-API_SECRET = "NywiFqlswcE05ntkeNF4JELFBLPv7sB4wcsmKTbIFMWP6bls5B82YnUPGuwOFqGp"
+API_KEY = ""
+API_SECRET = ""
 
 # API Endpoints
 FUTURES_URL = "https://testnet.binancefuture.com"
